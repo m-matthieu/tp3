@@ -41,6 +41,11 @@
 #include <QtGui/QWindow>
 #include <QtGui/QOpenGLFunctions>
 
+#include <QtNetwork\qtcpserver.h>
+#include <QtNetwork\QTcpSocket>
+
+#include <vector>
+
 QT_BEGIN_NAMESPACE
 class QPainter;
 class QOpenGLContext;
@@ -63,12 +68,83 @@ public:
 
 public slots:
     void renderNow();
+	void newConnection( );
+	
+	void updateWeather( ) {
+		// MAJ TEMPS
+		temps++;
+		temps %= 4;
 
+		qDebug( ) << "--UPDATE WEATHER--";
+
+
+		for( int i = 0; i != mes_clients.size( ); ++i ) {
+			char *c = (char *)malloc( 20 * sizeof( char ) );
+			sprintf( c, "%i", ( i + temps + 1 ) % 4 );
+			mes_clients[i]->write( c );
+			mes_clients[i]->flush( );
+			qDebug( ) << c;
+
+			free( c );
+		}
+	}
+
+	void readyRead( ) {
+		//qDebug( ) << client->readAll( );
+		QByteArray c = client->readAll();
+		temps = atoi( c.data() );
+	}
 protected:
 
     bool event(QEvent *event);
 
     void exposeEvent(QExposeEvent *event);
+
+	QTcpServer *server;
+	QTcpSocket *client;
+
+	std::vector<QTcpSocket *> mes_clients;
+
+	// 0: printemps
+	// 1: été
+	// 2: automne
+	// 3: hiver
+	int temps = 0;
+	
+
+	void closeConnections( ) {
+		for( int i = 0; i != mes_clients.size( ); ++i ) {
+			mes_clients[i]->close( );
+		}
+
+		mes_clients.clear( );
+	}
+
+	void initServer( ) {
+		server = new QTcpServer( this );
+		client = NULL;
+
+		connect( server, SIGNAL( newConnection( ) ),
+				 this, SLOT( newConnection( ) ) );
+
+		server->listen( QHostAddress::Any, 4578 );
+		qDebug( ) << "--SERVER INITIALIZED--";
+	}
+
+	void initClient( ) {
+		server = NULL;
+		client = new QTcpSocket( this );
+
+		connect( client, SIGNAL( readyRead( ) ), this, SLOT( readyRead( ) ) );
+
+		client->connectToHost( "127.0.0.1", 4578 );
+		// we need to wait...
+		if( !client->waitForConnected( 5000 ) ) {
+			qDebug( ) << "--ERROR-- : " << client->errorString( );
+		} else {
+			qDebug( ) << "--CLIENT CONNECTED--";
+		}
+	}
 
 private:
 

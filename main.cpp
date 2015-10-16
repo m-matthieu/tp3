@@ -8,20 +8,24 @@
 #include <QtCore/qmath.h>
 #include <QMouseEvent>
 #include <QKeyEvent>
+//#include <sys/time.h>
 #include <time.h>
-#include <sys/time.h>
 #include <iostream>
 
 #include <QtCore>
 #include <QtGui>
-using namespace std;
+#include <QThread>
+#include <QTimer>
 
+using namespace std;
 
 
 struct point
 {
-    float x, y ,z;
+    float x, y ,z; 
+
 };
+
 
 class paramCamera
 {
@@ -34,11 +38,20 @@ public:
     int etat = 0;
 };
 
+class monThread : public QThread {
+private:
+	void run() {
+		QThread::run();
+		qDebug( ) << "From worker thread: " << currentThreadId( );
+	}
+};
+
 class TriangleWindow : public OpenGLWindow
 {
+	
 public:
     TriangleWindow();
-    TriangleWindow(int maj);
+	explicit TriangleWindow( int maj );
     void initialize();
     void render();
     bool event(QEvent *event);
@@ -56,6 +69,21 @@ public:
     void loadMap(QString localPath);
     paramCamera* c;
 
+	struct partic {
+		partic() {
+			x = 0; y = 0; z = 0;
+		}
+		partic( float a, float b, float c ) {
+			x = a; y = b; z = c;
+		}
+		float x, y, z;
+	};
+
+	struct goutte_eau {
+		partic pos;
+		float speed;
+	};
+
 private:
     bool master = false;
     int m_frame;
@@ -69,6 +97,82 @@ private:
     int maj = 20;
 
     QTimer *timer;
+
+	monThread thr;
+
+	QTimer *server_timer;
+
+	
+
+	partic gravity; // ( 0, -1, 0 );
+	partic wind; // ( 0.5f, 0, 0.5f );
+	float windForce = .2f;
+	float speedRand = 0.05f;
+	float speedBase = .1f;
+	float skyPos = 1.2f;
+	float skyBoundX = 2, skyBoundZ = 2;
+
+	partic color;
+
+	goutte_eau eau[50];
+
+	void initEau() {
+		gravity = partic( 0, 0, -1 );
+		wind = partic( 0.5f, 0.5f, 0 );
+
+		color = partic( 0, 0, 1 );
+
+		for( int i = 0; i != 50; ++i ) {
+			eau[i].speed = speedBase + ( (float)rand() / (float)RAND_MAX * speedRand );
+			eau[i].pos.y = skyPos;
+			eau[i].pos.x = -( (float)rand() / (float)RAND_MAX * ( skyBoundX ) );
+			eau[i].pos.z = -( (float)rand() / (float)RAND_MAX * ( skyBoundZ ) );
+		}
+	}
+
+	void udateEau() {
+		if( OpenGLWindow::temps == 2 ) { // automne
+			color = partic( 0, 0, 1 );
+			speedBase = .1f;
+			speedRand = .05f;
+			windForce = .2f;
+		} else if( OpenGLWindow::temps == 3 ) { // hiver
+			color = partic( 1, 1, 1 );
+			speedBase = .01f;
+			speedRand = .014f;
+			windForce = .01f;
+		} else {
+			return;
+		}
+
+		for( int i = 0; i != 50; ++i ) {
+			// gravity
+			eau[i].pos.y += gravity.y * eau[i].speed;
+			eau[i].pos.x += gravity.x * eau[i].speed;
+			eau[i].pos.z += gravity.z * eau[i].speed;
+
+			// wind
+			eau[i].pos.y += wind.y * windForce;
+			eau[i].pos.x += wind.x * windForce;
+			eau[i].pos.z += wind.z * windForce;
+			float groundHeight;
+
+			if( eau[i].pos.x < 0 || eau[i].pos.y < 0 || eau[i].pos.x > 1.0f || eau[i].pos.y > 1.0f ) { // out of bounds
+				groundHeight = 0.0f;
+			} else {
+				QRgb px = m_image.pixel( (int)( eau[i].pos.x * (float)m_image.width() ), (int)( eau[i].pos.y * (float)m_image.height() ) );
+
+				groundHeight = 0.001f * (float)( qRed( px ) );
+			}
+
+			if( eau[i].pos.z <= groundHeight ) {
+				eau[i].pos.z = skyPos;
+				eau[i].pos.x = -( (float)rand() / (float)RAND_MAX * ( skyBoundX ) );
+				eau[i].pos.y = -( (float)rand() / (float)RAND_MAX * ( skyBoundZ ) );
+				eau[i].speed = speedBase + ( (float)rand( ) / (float)RAND_MAX * speedRand );
+			}
+		}
+	}
 
 };
 
@@ -84,8 +188,19 @@ TriangleWindow::TriangleWindow()
     timer->connect(timer, SIGNAL(timeout()),this, SLOT(renderNow()));
     timer->start(maj);
     master = true;
+
+	OpenGLWindow::initServer();
+
+	server_timer = new QTimer();
+	server_timer->connect( server_timer, SIGNAL( timeout( ) ), this, SLOT( updateWeather( ) ) );
+	server_timer->setInterval( 1000 /* 60 */ * 5 );
+	server_timer->start( );
+
+	initEau();
+	thr.start();
+
 }
-TriangleWindow::TriangleWindow(int _maj)
+TriangleWindow::TriangleWindow( int _maj )
 {
 
     maj = _maj;
@@ -98,6 +213,11 @@ TriangleWindow::TriangleWindow(int _maj)
     timer = new QTimer();
     timer->connect(timer, SIGNAL(timeout()),this, SLOT(renderNow()));
     timer->start(maj);
+
+	OpenGLWindow::initClient();
+
+	initEau();
+	thr.start();
 }
 int main(int argc, char **argv)
 {
@@ -123,14 +243,14 @@ int main(int argc, char **argv)
     window2.setPosition(500, 0);
     window2.show();
 
-    TriangleWindow window3(500);
+    TriangleWindow window3(100);
     window3.c = c;
     window3.setFormat(format);
     window3.resize(500,375);
     window3.setPosition(0, 450);
     window3.show();
 
-    TriangleWindow window4(1000);
+    TriangleWindow window4(100);
     window4.c = c;
     window4.setFormat(format);
     window4.resize(500,375);
@@ -188,6 +308,11 @@ void TriangleWindow::loadMap(QString localPath)
 void TriangleWindow::render()
 {
 
+	if( OpenGLWindow::temps == 1 ) {
+		glClearColor( 0.2f, 0.65f, 0.86f, 1.0f );
+	} else {
+		glClearColor( 0,0,0, 1 );
+	}
     glClear(GL_COLOR_BUFFER_BIT);
 
 
@@ -232,6 +357,18 @@ void TriangleWindow::render()
         break;
     }
 
+	// particles
+	if( OpenGLWindow::temps > 1 ) {
+		glPointSize( 3 );
+		udateEau();
+		glColor3f( color.x, color.y, color.z );
+		glBegin( GL_POINTS );
+		for( int i = 0; i != 50; ++i ) {
+			glVertex3f( eau[i].pos.x, eau[i].pos.y, eau[i].pos.z );
+		}
+		glEnd();
+		glPointSize( 1 );
+	}
     ++m_frame;
 }
 
@@ -327,7 +464,16 @@ void TriangleWindow::keyPressEvent(QKeyEvent *event)
 
 void TriangleWindow::displayPoints()
 {
-    glColor3f(1.0f, 1.0f, 1.0f);
+    //glColor3f(1.0f, 1.0f, 1.0f);
+	if( OpenGLWindow::temps == 0 ) {
+		glColor3f( 1, 0.79f, 0.055f );
+	} else if( OpenGLWindow::temps == 1 ) {
+		glColor3f( 1, 0.79f, 0.055f );
+	} else if( OpenGLWindow::temps == 2 ) {
+		glColor3f( 0.93f, 0.37f, 0.125f );
+	} else {
+		glColor3f( 1.0f, 1.0f, 1.0f );
+	}
     glBegin(GL_POINTS);
     uint id = 0;
     for(int i = 0; i < m_image.width(); i++)

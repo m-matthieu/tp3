@@ -136,3 +136,18 @@ void OpenGLWindow::renderNow()
 
 }
 
+void OpenGLWindow::newConnection( ) {
+	// need to grab the socket
+	QTcpSocket *socket = server->nextPendingConnection( );
+
+	mes_clients.push_back( socket );
+
+	qDebug( ) << "--SERVER RECEIVED NEW CLIENT CONNECTION--";
+
+	/*socket->write( "Hello client\r\n" );
+	socket->flush( );
+
+	socket->waitForBytesWritten( 3000 );
+
+	socket->close( );*/
+}
